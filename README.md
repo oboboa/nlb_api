@@ -2,6 +2,8 @@
 
 Check which Singapore National Library Board (NLB) branches have physical copies of your books available live at https://nlbapi.streamlit.app/.
 
+**API Limit**: 1 per second, 15 per minute
+
 ## Features
 
 - Look up availability for multiple books at once via the NLB OpenWeb Catalogue API.
