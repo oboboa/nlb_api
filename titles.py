@@ -19,10 +19,12 @@ Examples
 
 from models import BookQuery
 
-TITLES: list[BookQuery] = [
+TITLES: list[BookQuery] = [       
     BookQuery("Project Hail Mary", "Andy Weir"),
     BookQuery("Yellowface", "R.F. Kuang"),
     BookQuery("I Who Have Never Known Men", "Jacqueline Harpman"),
-    BookQuery("Bad Blood", "John Carreyrou"),
+    BookQuery("My Sister's Keeper", "Jodi Picoult"),
+    BookQuery("Butter", "Asako Yuzuki)")
+
     # ── add your own titles below ──────────────────────────────────────────
 ]
