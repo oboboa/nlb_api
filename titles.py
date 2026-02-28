@@ -21,8 +21,8 @@ from models import BookQuery
 
 TITLES: list[BookQuery] = [
     BookQuery("Project Hail Mary", "Andy Weir"),
-    BookQuery("Remarkably Bright Creatures", "Shelby Van Pelt"),
-    BookQuery("The Midnight Library", "Matt Haig"),
-    BookQuery("Atomic Habits", "James Clear"),
+    BookQuery("Yellowface", "R.F. Kuang"),
+    BookQuery("I Who Have Never Known Men", "Jacqueline Harpman"),
+    BookQuery("Bad Blood", "John Carreyrou"),
     # ── add your own titles below ──────────────────────────────────────────
 ]
