@@ -47,6 +47,8 @@ if "results_list" not in st.session_state:
     st.session_state["results_list"] = []    # list[dict], newest-first
 if "results_keys" not in st.session_state:
     st.session_state["results_keys"] = set() # set of (title_lower, author_lower) already fetched
+if "favorite_libraries" not in st.session_state:
+    st.session_state["favorite_libraries"] = []  # list[str] of pinned library names
 
 # ── helper ────────────────────────────────────────────────────────────────────
 
@@ -277,10 +279,80 @@ if run:
 
 results: list[dict] = st.session_state["results_list"]
 
+# ── Sidebar: favourite libraries picker (populated from results) ──────────────
+with st.sidebar:
+    st.divider()
+    st.subheader("⭐ Favourite libraries")
+    all_known_libs: list[str] = sorted(
+        {lib["library"] for r in results for lib in r["libraries"]}
+    )
+    if all_known_libs:
+        st.session_state["favorite_libraries"] = st.multiselect(
+            "Pin libraries to the top of the rankings",
+            options=all_known_libs,
+            default=[
+                l for l in st.session_state["favorite_libraries"]
+                if l in all_known_libs
+            ],
+            label_visibility="collapsed",
+        )
+    else:
+        st.caption("Run a search first to see available libraries.")
+
 # ── Results ─────────────────────────────────────────────────────────────────
 if not results:
     st.info("Select titles above and click **Check availability** to begin.")
 else:
+    # ── Library rankings ──────────────────────────────────────────────────────
+    from collections import defaultdict
+
+    lib_books: dict[str, int] = defaultdict(int)   # library → # titles with ≥1 available copy
+    lib_copies: dict[str, int] = defaultdict(int)  # library → total available copies
+    for r in results:
+        for lib in r["libraries"]:
+            if lib["available"] > 0:
+                lib_books[lib["library"]] += 1
+                lib_copies[lib["library"]] += lib["available"]
+
+    favorites: list[str] = st.session_state["favorite_libraries"]
+    fav_set = set(favorites)
+
+    # Favourites: show regardless of count; others: only if >1 book available
+    fav_ranked = sorted(favorites, key=lambda l: (-lib_books.get(l, 0), -lib_copies.get(l, 0)))
+    top_ranked = [
+        l for l in sorted(lib_books, key=lambda l: (-lib_books[l], -lib_copies[l]))
+        if l not in fav_set and lib_books[l] > 1
+    ]
+
+    if fav_ranked or top_ranked:
+        st.subheader("📍 Where to go")
+
+        def _lib_row(name: str, rank: int | None = None) -> None:
+            books = lib_books.get(name, 0)
+            copies = lib_copies.get(name, 0)
+            prefix = f"{rank}. " if rank else "⭐ "
+            colour = "green" if books > 0 else "orange"
+            book_word = "title" if books == 1 else "titles"
+            copy_word = "copy" if copies == 1 else "copies"
+            detail = (
+                f"{books} {book_word} available ({copies} {copy_word})"
+                if books > 0
+                else "none of your checked titles available right now"
+            )
+            st.markdown(f":{colour}[**{prefix}{name}**] — {detail}")
+
+        if fav_ranked:
+            st.caption("⭐ Your favourites")
+            for name in fav_ranked:
+                _lib_row(name)
+
+        if top_ranked:
+            st.caption("🏆 Most titles available")
+            for i, name in enumerate(top_ranked, 1):
+                _lib_row(name, rank=i)
+
+        st.divider()
+
     # ── summary banner ────────────────────────────────────────────────────────
     n_available = sum(1 for r in results if r["any_available"])
     n_total = len(results)
