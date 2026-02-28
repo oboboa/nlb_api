@@ -44,7 +44,7 @@ class NLBClient:
         api_key: str,
         app_code: str,
         request_delay: float = 1.0,
-        retry_wait: float = 5.0,
+        retry_wait: float = 20.0,
         max_retries: int = 3,
         timeout: int = 15,
     ) -> None:

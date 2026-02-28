@@ -25,7 +25,8 @@ import streamlit as st
 from dotenv import load_dotenv
 
 from availability import fetch_all
-from models import BookAvailability
+from goodreads import available_shelves, parse_goodreads_csv, SHELF_LABELS, _ALL_SHELVES
+from models import BookAvailability, BookQuery
 from nlb_client import NLBClient
 from titles import TITLES
 
@@ -38,6 +39,14 @@ st.set_page_config(
 )
 
 load_dotenv()
+
+# ── session state defaults ────────────────────────────────────────────────────
+if "manual_titles" not in st.session_state:
+    st.session_state["manual_titles"] = []   # list[BookQuery] added via the UI
+if "results_list" not in st.session_state:
+    st.session_state["results_list"] = []    # list[dict], newest-first
+if "results_keys" not in st.session_state:
+    st.session_state["results_keys"] = set() # set of (title_lower, author_lower) already fetched
 
 # ── helper ────────────────────────────────────────────────────────────────────
 
@@ -54,8 +63,8 @@ def _make_client() -> NLBClient | None:
 
 
 @st.cache_data(ttl=1800, show_spinner=False)   # cache results for 30 minutes
-def _fetch_results(_client_key: tuple, titles_repr: str) -> list[dict]:
-    """Cached wrapper — returns results as plain dicts so Streamlit can pickle them."""
+def _fetch_results(_client_key: tuple, titles_repr: str, _titles: list[BookQuery]) -> list[dict]:
+    """Fetch only the supplied titles and return serialised dicts."""
     api_key, app_code = _client_key
     client = NLBClient(api_key, app_code)
 
@@ -65,10 +74,10 @@ def _fetch_results(_client_key: tuple, titles_repr: str) -> list[dict]:
     def on_status(msg: str) -> None:
         log.append(msg)
         status_placeholder.markdown(
-            "**Fetching…**\n\n" + "\n\n".join(f"- {m}" for m in log[-5:])
+            "**Fetching\u2026**\n\n" + "\n\n".join(f"- {m}" for m in log[-5:])
         )
 
-    results = fetch_all(TITLES, client, on_status=on_status)
+    results = fetch_all(_titles, client, on_status=on_status)
     status_placeholder.empty()
 
     # Serialise to plain dicts for Streamlit's pickle-based cache
@@ -105,19 +114,133 @@ def _serialise(r: BookAvailability) -> dict:
     }
 
 
+# ── Sidebar: Goodreads import ─────────────────────────────────────────────────
+
+with st.sidebar:
+    st.header("📥 Import from Goodreads")
+    st.markdown(
+        "Export your library from "
+        "[Goodreads → Import and Export](https://www.goodreads.com/review/import), "
+        "then upload the CSV here."
+    )
+    uploaded = st.file_uploader("Goodreads CSV export", type="csv", label_visibility="collapsed")
+
+    imported_titles: list[BookQuery] = []
+    if uploaded is not None:
+        raw = uploaded.read()
+        found_shelves = available_shelves(raw)
+        shelf_options = found_shelves or _ALL_SHELVES
+        shelf_labels = [SHELF_LABELS.get(s, s) for s in shelf_options]
+
+        selected_labels = st.multiselect(
+            "Shelves to include",
+            options=shelf_labels,
+            default=[SHELF_LABELS.get("to-read", shelf_labels[0])] if shelf_labels else [],
+        )
+        # Map labels back to raw shelf names
+        label_to_shelf = {v: k for k, v in SHELF_LABELS.items()}
+        selected_shelves = [label_to_shelf.get(lbl, lbl) for lbl in selected_labels]
+
+        imported_titles = parse_goodreads_csv(raw, shelves=selected_shelves)
+        st.success(f"{len(imported_titles)} book(s) loaded from Goodreads")
+
+    st.divider()
+    use_default = st.checkbox(
+        f"Also include hardcoded titles.py list ({len(TITLES)} titles)",
+        value=uploaded is None,
+        disabled=uploaded is None,
+    )
+
+    st.divider()
+    st.subheader("➕ Add a title")
+    with st.form("add_title_form", clear_on_submit=True):
+        new_title = st.text_input("Title")
+        new_author = st.text_input("Author")
+        submitted = st.form_submit_button("Add", use_container_width=True)
+        if submitted:
+            t, a = new_title.strip(), new_author.strip()
+            if t and a:
+                st.session_state["manual_titles"].append(BookQuery(title=t, author=a))
+            else:
+                st.warning("Please fill in both Title and Author.")
+
+    if st.session_state["manual_titles"]:
+        if st.button("🗑 Clear manually added titles", use_container_width=True):
+            st.session_state["manual_titles"] = []
+            st.rerun()
+
+# ── Build candidate list from all sources ─────────────────────────────────────
+candidates: list[BookQuery] = []
+seen_candidates: set[tuple[str, str]] = set()
+
+for source in (
+    imported_titles,
+    st.session_state["manual_titles"],
+    TITLES if (use_default or not imported_titles) else [],
+):
+    for q in source:
+        key = (q.title.lower(), q.author.lower())
+        if key not in seen_candidates:
+            seen_candidates.add(key)
+            candidates.append(q)
+
 # ── UI ────────────────────────────────────────────────────────────────────────
 
 st.title("📚 NLB Library Availability")
-st.caption(
-    f"Checking **{len(TITLES)}** title(s).  "
-    "Results are cached for 30 minutes to stay under the API rate limit."
-)
+
+# ── Title selection table ─────────────────────────────────────────────────────
+with st.expander(
+    f"📋 Titles to check ({len(candidates)} total)",
+    expanded=not st.session_state["results_list"],
+):
+    st.caption("Tick the checkboxes to include or exclude individual titles.")
+
+    if not candidates:
+        st.info("No titles yet — add some via the sidebar.")
+        st.stop()
+
+    # Key changes whenever the candidate list changes so the editor resets to
+    # all-selected when a new import or manual entry is added.
+    _editor_key = f"title_editor_{hash(str([(q.title, q.author) for q in candidates]))}"
+    candidate_rows = [{"✓": True, "Title": q.title, "Author": q.author} for q in candidates]
+
+    edited_rows: list[dict] = st.data_editor(
+        candidate_rows,
+        column_config={
+            "✓": st.column_config.CheckboxColumn("✓", default=True, width="small"),
+            "Title": st.column_config.TextColumn("Title", disabled=True),
+            "Author": st.column_config.TextColumn("Author", disabled=True),
+        },
+        hide_index=True,
+        use_container_width=True,
+        key=_editor_key,
+    )
+
+    active_titles: list[BookQuery] = [
+        candidates[i] for i, row in enumerate(edited_rows) if row["✓"]
+    ]
+    already_fetched = sum(
+        1 for q in active_titles
+        if (q.title.lower(), q.author.lower()) in st.session_state["results_keys"]
+    )
+    new_count = len(active_titles) - already_fetched
+    note = f"**{len(active_titles)}/{len(candidates)}** selected"
+    if already_fetched:
+        note += f" • {already_fetched} already cached, {new_count} new"
+    st.caption(note)
 
 col_check, col_clear = st.columns([3, 1])
 with col_check:
-    run = st.button("🔍 Check availability", use_container_width=True, type="primary")
+    run = st.button(
+        "🔍 Check availability",
+        use_container_width=True,
+        type="primary",
+        disabled=len(active_titles) == 0,
+    )
 with col_clear:
-    if st.button("🗑 Clear cache", use_container_width=True):
+    if st.button("🗑 Clear all results", use_container_width=True):
+        st.session_state["results_list"] = []
+        st.session_state["results_keys"] = set()
         st.cache_data.clear()
         st.rerun()
 
@@ -125,23 +248,39 @@ client = _make_client()
 if client is None:
     st.stop()
 
-if run or st.session_state.get("results"):
-
-    if run:
-        # Invalidate old session results so a fresh fetch is triggered
-        st.session_state.pop("results", None)
-
-    if "results" not in st.session_state:
+if run:
+    # Only fetch titles not already in the cache
+    titles_to_fetch = [
+        q for q in active_titles
+        if (q.title.lower(), q.author.lower()) not in st.session_state["results_keys"]
+    ]
+    if not titles_to_fetch:
+        st.info("All selected titles are already in the results below.")
+    else:
         api_key = os.getenv("NLB_API_KEY", "")
         app_code = os.getenv("NLB_APP_CODE", "")
-        titles_repr = str([(q.title, q.author, q.material_type) for q in TITLES])
-        with st.spinner("Querying NLB API — this may take a minute for long lists …"):
-            st.session_state["results"] = _fetch_results(
-                (api_key, app_code), titles_repr
-            )
+        n = len(titles_to_fetch)
+        # Each book uses ~2 API calls; 15/min limit → warn if it'll take a while
+        est_mins = round(n * 2 / 15 * 1.2, 1)
+        spinner_msg = (
+            f"Querying NLB API for {n} new title(s)…"
+            + (f" (est. ~{est_mins} min)" if est_mins >= 1 else "")
+        )
+        titles_repr = str([(q.title, q.author, q.material_type) for q in titles_to_fetch])
+        with st.spinner(spinner_msg):
+            new_results = _fetch_results((api_key, app_code), titles_repr, titles_to_fetch)
+        # Prepend newest results
+        st.session_state["results_list"] = new_results + st.session_state["results_list"]
+        for r in new_results:
+            st.session_state["results_keys"].add((r["title"].lower(), r["author"].lower()))
+        st.rerun()
 
-    results: list[dict] = st.session_state["results"]
+results: list[dict] = st.session_state["results_list"]
 
+# ── Results ─────────────────────────────────────────────────────────────────
+if not results:
+    st.info("Select titles above and click **Check availability** to begin.")
+else:
     # ── summary banner ────────────────────────────────────────────────────────
     n_available = sum(1 for r in results if r["any_available"])
     n_total = len(results)
