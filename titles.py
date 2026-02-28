@@ -21,13 +21,12 @@ from models import BookQuery
 
 TITLES: list[BookQuery] = [
     BookQuery("Yellowface", "R.F. Kuang"),
-    BookQuery("I Who Have Never Known Men", "Jacqueline Harpman"),
-    BookQuery("My Sister's Keeper", "Jodi Picoult"),
     BookQuery("Watership Down (Watership Down, #1)", "Richard  Adams"),
     BookQuery("The Book Thief", "Markus Zusak"),
     BookQuery("To Kill a Mockingbird", "Harper Lee"),
     BookQuery("Bad Blood", "John Carreyrou"),
-    BookQuery("I'm Glad My Mom Died", "Jennette McCurdy"),          
+    BookQuery("I Who Have Never Known Men", "Jacqueline Harpman"),
+    BookQuery("My Sister's Keeper", "Jodi Picoult"),       
     BookQuery("Project Hail Mary", "Andy Weir"),
 
     # ── add your own titles below ──────────────────────────────────────────
