@@ -53,12 +53,13 @@ if "favorite_libraries" not in st.session_state:
 # ── helper ────────────────────────────────────────────────────────────────────
 
 def _make_client() -> NLBClient | None:
-    api_key = os.getenv("NLB_API_KEY")
-    app_code = os.getenv("NLB_APP_CODE")
+    api_key = st.secrets.get("NLB_API_KEY") or os.getenv("NLB_API_KEY")
+    app_code = st.secrets.get("NLB_APP_CODE") or os.getenv("NLB_APP_CODE")
     if not api_key or not app_code:
         st.error(
             "Missing credentials.  "
-            "Set **NLB_API_KEY** and **NLB_APP_CODE** in your `.env` file or environment."
+            "Set **NLB_API_KEY** and **NLB_APP_CODE** in `.streamlit/secrets.toml` (local) "
+            "or the Streamlit Cloud dashboard (deployed)."
         )
         return None
     return NLBClient(api_key, app_code)
@@ -259,8 +260,8 @@ if run:
     if not titles_to_fetch:
         st.info("All selected titles are already in the results below.")
     else:
-        api_key = os.getenv("NLB_API_KEY", "")
-        app_code = os.getenv("NLB_APP_CODE", "")
+        api_key = st.secrets.get("NLB_API_KEY") or os.getenv("NLB_API_KEY", "")
+        app_code = st.secrets.get("NLB_APP_CODE") or os.getenv("NLB_APP_CODE", "")
         n = len(titles_to_fetch)
         # Each book uses ~2 API calls; 15/min limit → warn if it'll take a while
         est_mins = round(n * 2 / 15 * 1.2, 1)
@@ -306,13 +307,21 @@ else:
     # ── Library rankings ──────────────────────────────────────────────────────
     from collections import defaultdict
 
-    lib_books: dict[str, int] = defaultdict(int)   # library → # titles with ≥1 available copy
-    lib_copies: dict[str, int] = defaultdict(int)  # library → total available copies
+    lib_books: dict[str, int] = defaultdict(int)          # library → # titles with ≥1 available copy
+    lib_copies: dict[str, int] = defaultdict(int)         # library → total available copies
+    lib_titles: dict[str, list[dict]] = defaultdict(list) # library → list of result dicts available there
     for r in results:
         for lib in r["libraries"]:
             if lib["available"] > 0:
                 lib_books[lib["library"]] += 1
                 lib_copies[lib["library"]] += lib["available"]
+                lib_titles[lib["library"]].append({
+                    "title": r["title"],
+                    "author": r["author"],
+                    "available": lib["available"],
+                    "total": lib["total"],
+                    "call_number": lib["copies"][0]["call_number"] if lib["copies"] else "",
+                })
 
     favorites: list[str] = st.session_state["favorite_libraries"]
     fav_set = set(favorites)
@@ -327,11 +336,9 @@ else:
     if fav_ranked or top_ranked:
         st.subheader("📍 Where to go")
 
-        def _lib_row(name: str, rank: int | None = None) -> None:
+        def _lib_block(name: str, prefix: str, colour: str) -> None:
             books = lib_books.get(name, 0)
             copies = lib_copies.get(name, 0)
-            prefix = f"{rank}. " if rank else "⭐ "
-            colour = "green" if books > 0 else "orange"
             book_word = "title" if books == 1 else "titles"
             copy_word = "copy" if copies == 1 else "copies"
             detail = (
@@ -340,16 +347,26 @@ else:
                 else "none of your checked titles available right now"
             )
             st.markdown(f":{colour}[**{prefix}{name}**] — {detail}")
+            titles_here = lib_titles.get(name, [])
+            if titles_here:
+                with st.expander(f"Show {len(titles_here)} available title(s)", expanded=False):
+                    for entry in sorted(titles_here, key=lambda x: -x["available"]):
+                        call = f" · `{entry['call_number']}`" if entry["call_number"] else ""
+                        st.markdown(
+                            f"- **{entry['title']}** — *{entry['author']}*  \n"
+                            f"  {entry['available']}/{entry['total']} copies available{call}"
+                        )
 
         if fav_ranked:
             st.caption("⭐ Your favourites")
             for name in fav_ranked:
-                _lib_row(name)
+                colour = "green" if lib_books.get(name, 0) > 0 else "orange"
+                _lib_block(name, prefix="⭐ ", colour=colour)
 
         if top_ranked:
             st.caption("🏆 Most titles available")
             for i, name in enumerate(top_ranked, 1):
-                _lib_row(name, rank=i)
+                _lib_block(name, prefix=f"{i}. ", colour="green")
 
         st.divider()
 
