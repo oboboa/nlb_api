@@ -49,6 +49,8 @@ if "results_keys" not in st.session_state:
     st.session_state["results_keys"] = set() # set of (title_lower, author_lower) already fetched
 if "favorite_libraries" not in st.session_state:
     st.session_state["favorite_libraries"] = []  # list[str] of pinned library names
+if "select_all" not in st.session_state:
+    st.session_state["select_all"] = True
 
 # ── helper ────────────────────────────────────────────────────────────────────
 
@@ -167,6 +169,34 @@ with st.sidebar:
             else:
                 st.warning("Please fill in both Title and Author.")
 
+    st.subheader("➕ Add multiple titles")
+    with st.form("add_bulk_titles_form", clear_on_submit=True):
+        st.caption("One entry per line: `Title, Author`")
+        bulk_input = st.text_area("Titles", height=120, label_visibility="collapsed",
+                                  placeholder="The Midnight Library, Matt Haig\nAtomicHabits, James Clear")
+        bulk_submitted = st.form_submit_button("Add all", use_container_width=True)
+        if bulk_submitted:
+            added, skipped = 0, []
+            for line in bulk_input.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                parts = line.split(",", 1)
+                if len(parts) == 2:
+                    t, a = parts[0].strip(), parts[1].strip()
+                    if t and a:
+                        st.session_state["manual_titles"].append(BookQuery(title=t, author=a))
+                        added += 1
+                        continue
+                skipped.append(line)
+            if added:
+                st.success(f"Added {added} title(s).")
+            if skipped:
+                st.warning(
+                    f"{len(skipped)} line(s) skipped (missing comma or empty field):\n"
+                    + "\n".join(f"- `{s}`" for s in skipped)
+                )
+
     if st.session_state["manual_titles"]:
         if st.button("🗑 Clear manually added titles", use_container_width=True):
             st.session_state["manual_titles"] = []
@@ -202,10 +232,20 @@ with st.expander(
         st.info("No titles yet — add some via the sidebar.")
         st.stop()
 
-    # Key changes whenever the candidate list changes so the editor resets to
-    # all-selected when a new import or manual entry is added.
-    _editor_key = f"title_editor_{hash(str([(q.title, q.author) for q in candidates]))}"
-    candidate_rows = [{"✓": True, "Title": q.title, "Author": q.author} for q in candidates]
+    _sel_col, _desel_col = st.columns(2)
+    with _sel_col:
+        if st.button("☑ Select all", use_container_width=True):
+            st.session_state["select_all"] = True
+            st.rerun()
+    with _desel_col:
+        if st.button("☐ Deselect all", use_container_width=True):
+            st.session_state["select_all"] = False
+            st.rerun()
+
+    # Key changes whenever the candidate list changes OR select-all state changes
+    # so the editor resets with the correct defaults.
+    _editor_key = f"title_editor_{hash(str([(q.title, q.author) for q in candidates]))}_{st.session_state['select_all']}"
+    candidate_rows = [{"✓": st.session_state["select_all"], "Title": q.title, "Author": q.author} for q in candidates]
 
     edited_rows: list[dict] = st.data_editor(
         candidate_rows,
